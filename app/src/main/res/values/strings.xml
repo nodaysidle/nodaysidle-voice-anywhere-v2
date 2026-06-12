@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Voice Anywhere</string>
+    <string name="accessibility_service_label">Voice Anywhere Floating Mic</string>
+    <string name="accessibility_service_description">Shows a floating microphone and inserts your dictated text into the focused text field. Audio is processed only when you tap record.</string>
+</resources>

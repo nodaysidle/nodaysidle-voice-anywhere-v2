@@ -1,0 +1,6 @@
+-keep public class com.nodaysidle.voiceanywhere.MainActivity { *; }
+-keep public class com.nodaysidle.voiceanywhere.DictationActivity { *; }
+-keep public class com.nodaysidle.voiceanywhere.service.VoiceAccessibilityService { *; }
+-keep public class com.nodaysidle.voiceanywhere.service.ClipboardDismissReceiver { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**

@@ -1,0 +1,29 @@
+# Signing keys — never commit
+app/keystore/
+*.jks
+*.keystore
+
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+
+# Build artifacts
+app/build/
+build/
+.gradle/
+*.class
+*.bin
+*.dex
+*.ap_
+*.rlib
+*.rmeta
+*.dylib
+mapping.txt
