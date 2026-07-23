@@ -1,3 +1,5 @@
+<img src=".github/social-preview.png" alt="Voice Anywhere V2 — NODAYSIDLE" width="100%">
+
 # Voice Anywhere V2
 
 > Universal voice dictation overlay for Android — speak into any app, anywhere.
