@@ -22,7 +22,6 @@ import android.text.TextWatcher
 import android.text.format.DateFormat
 import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
-import android.view.View
 import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.EditorInfo
@@ -37,20 +36,21 @@ import androidx.core.content.ContextCompat
 import com.nodaysidle.voiceanywhere.history.TranscriptHistoryItem
 import com.nodaysidle.voiceanywhere.history.TranscriptHistoryStore
 import com.nodaysidle.voiceanywhere.security.DeepSeekKeyStore
+import com.nodaysidle.voiceanywhere.security.OpenRouterKeyStore
 import com.nodaysidle.voiceanywhere.service.VoiceAccessibilityService
 
 class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var readinessLabel: TextView
     private lateinit var micStatus: TextView
-    private lateinit var futoStatus: TextView
+    private lateinit var sttStatus: TextView
     private lateinit var notificationStatus: TextView
     private lateinit var accessibilityStatus: TextView
     private lateinit var cloudStatus: TextView
+    private lateinit var sttKeyStatus: TextView
     private lateinit var apiKeyInput: EditText
+    private lateinit var openRouterKeyInput: EditText
     private lateinit var historyList: LinearLayout
-
-    private val prefs by lazy { getSharedPreferences("voice_anywhere", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +71,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
-        saveApiKey()
+        saveApiKeys()
         super.onPause()
     }
 
@@ -102,6 +102,7 @@ class MainActivity : Activity() {
 
         root.addView(hero())
         root.addView(setupPanel())
+        root.addView(sttPanel())
         root.addView(polishPanel())
         root.addView(historyPanel())
         root.addView(usagePanel())
@@ -133,7 +134,7 @@ class MainActivity : Activity() {
         })
 
         addView(TextView(this@MainActivity).apply {
-            text = "A floating dictation layer for Android. FUTO captures speech; Voice Anywhere restores focus, cleans text, and inserts it into the active field."
+            text = "A floating dictation pill for Android. Tap, speak, words insert at the cursor. OpenRouter STT when keyed; system recognizer otherwise. FUTO is optional."
             setTextColor(COLOR_TEXT_MUTED)
             textSize = 15f
             setLineSpacing(0f, 1.16f)
@@ -153,11 +154,11 @@ class MainActivity : Activity() {
 
         addView(statusGrid().apply {
             micStatus = statusTile("MIC")
-            futoStatus = statusTile("FUTO")
+            sttStatus = statusTile("STT")
             notificationStatus = statusTile("ALERTS")
             accessibilityStatus = statusTile("ACCESS")
             addView(micStatus)
-            addView(futoStatus)
+            addView(sttStatus)
             addView(notificationStatus)
             addView(accessibilityStatus)
         })
@@ -178,11 +179,36 @@ class MainActivity : Activity() {
         })
     }
 
+    private fun sttPanel(): LinearLayout = panel().apply {
+        addView(rowHeader("STT", "OpenRouter cloud speech"))
+        addView(bodyText("Paste an OpenRouter API key to use cloud STT (Deepgram Nova-3 via OpenRouter). Leave blank to use the system recognizer. FUTO is used automatically when installed and no OpenRouter key is set. Long-press the pill to cycle EN / IT / SL."))
+
+        sttKeyStatus = statusTile("OPENROUTER").apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply {
+                topMargin = dp(14)
+                bottomMargin = 0
+            }
+        }
+        addView(sttKeyStatus)
+
+        openRouterKeyInput = keyField(
+            current = OpenRouterKeyStore.read(this@MainActivity),
+            hint = "OpenRouter API key",
+            onChanged = {
+                OpenRouterKeyStore.write(this@MainActivity, it)
+                refreshStatus()
+            }
+        )
+        addView(openRouterKeyInput, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(58)).apply {
+            topMargin = dp(14)
+        })
+    }
+
     private fun polishPanel(): LinearLayout = panel().apply {
         addView(rowHeader("POLISH", "Optional cloud cleanup"))
-        addView(bodyText("Offline cleanup is always active and keeps dictated text on-device. Leave the key blank for local-only mode. If you save a DeepSeek key, every dictation is sent to DeepSeek for grammar repair before insertion."))
+        addView(bodyText("Offline cleanup always runs before insert. Paste never waits on polish. Leave the DeepSeek key blank to skip cloud grammar repair. If set, polish runs in the background after text is already inserted."))
 
-        cloudStatus = statusTile("CLOUD").apply {
+        cloudStatus = statusTile("POLISH").apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply {
                 topMargin = dp(14)
                 bottomMargin = 0
@@ -190,9 +216,23 @@ class MainActivity : Activity() {
         }
         addView(cloudStatus)
 
-        apiKeyInput = EditText(this@MainActivity).apply {
-            setText(DeepSeekKeyStore.read(this@MainActivity))
-            hint = "DeepSeek API key"
+        apiKeyInput = keyField(
+            current = DeepSeekKeyStore.read(this@MainActivity),
+            hint = "DeepSeek API key",
+            onChanged = {
+                DeepSeekKeyStore.write(this@MainActivity, it)
+                refreshStatus()
+            }
+        )
+        addView(apiKeyInput, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(58)).apply {
+            topMargin = dp(14)
+        })
+    }
+
+    private fun keyField(current: String, hint: String, onChanged: (String) -> Unit): EditText =
+        EditText(this).apply {
+            setText(current)
+            this.hint = hint
             setHintTextColor(Color.parseColor("#60645F"))
             setTextColor(Color.WHITE)
             textSize = 15f
@@ -205,7 +245,7 @@ class MainActivity : Activity() {
             minHeight = dp(56)
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_DONE) {
-                    saveApiKey()
+                    saveApiKeys()
                     clearFocus()
                     true
                 } else false
@@ -213,23 +253,18 @@ class MainActivity : Activity() {
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    DeepSeekKeyStore.write(this@MainActivity, s?.toString()?.trim().orEmpty())
-                    refreshStatus()
+                    onChanged(s?.toString()?.trim().orEmpty())
                 }
                 override fun afterTextChanged(s: Editable?) = Unit
             })
         }
-        addView(apiKeyInput, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(58)).apply {
-            topMargin = dp(14)
-        })
-    }
 
     private fun usagePanel(): LinearLayout = panel().apply {
         addView(rowHeader("FLOW", "Four moves"))
         addView(step("01", "Focus any text field", "Chat, browser, notes, search — wherever the cursor is."))
-        addView(step("02", "Tap the floating mic", "The accessibility overlay stays available above every app."))
-        addView(step("03", "Speak through FUTO", "FUTO owns speech recognition; this app owns insertion."))
-        addView(step("04", "Watch the result", "SET = direct insert, PST = paste fallback, CPY = clipboard fallback."))
+        addView(step("02", "Tap the floating pill", "Dark quiet overlay stays above every app. Long-press cycles EN / IT / SL."))
+        addView(step("03", "Speak", "OpenRouter records in-pill when keyed; otherwise system or optional FUTO."))
+        addView(step("04", "Watch the result", "Text lands at the cursor. SET / PST / CPY shows how it got there."))
     }
 
     private fun historyPanel(): LinearLayout = panel().apply {
@@ -397,24 +432,32 @@ class MainActivity : Activity() {
         ))
     }
 
-    private fun saveApiKey() {
-        if (!::apiKeyInput.isInitialized) return
-        DeepSeekKeyStore.write(this, apiKeyInput.text.toString().trim())
+    private fun saveApiKeys() {
+        if (::apiKeyInput.isInitialized) {
+            DeepSeekKeyStore.write(this, apiKeyInput.text.toString().trim())
+        }
+        if (::openRouterKeyInput.isInitialized) {
+            OpenRouterKeyStore.write(this, openRouterKeyInput.text.toString().trim())
+        }
         refreshStatus()
     }
 
     private fun refreshStatus() {
         val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        val futo = isFutoInstalled()
         val notifications = hasNotificationPermission()
         val accessibility = isAccessibilityEnabled()
+        val openRouterOn = OpenRouterKeyStore.read(this).isNotBlank()
+        val futo = isFutoInstalled()
+        // FUTO is optional — never blocks readiness. STT is ready when mic is granted.
+        val sttReady = mic
         renderStatus(micStatus, "MIC", mic, "READY", "GRANT")
-        renderStatus(futoStatus, "FUTO", futo, "INSTALLED", "MISSING")
+        renderSttStatus(sttReady, openRouterOn, futo)
         renderStatus(notificationStatus, "ALERTS", notifications, "READY", "GRANT")
         renderStatus(accessibilityStatus, "ACCESS", accessibility, "ENABLED", "ENABLE")
         if (::cloudStatus.isInitialized) renderCloudStatus(DeepSeekKeyStore.read(this).isNotBlank())
+        if (::sttKeyStatus.isInitialized) renderOpenRouterStatus(openRouterOn)
         if (::historyList.isInitialized) refreshHistory()
-        val readyCount = listOf(mic, futo, notifications, accessibility).count { it }
+        val readyCount = listOf(mic, sttReady, notifications, accessibility).count { it }
         readinessLabel.text = when (readyCount) {
             4 -> "Ready to dictate"
             3 -> "One switch left"
@@ -423,8 +466,36 @@ class MainActivity : Activity() {
         readinessLabel.setTextColor(if (readyCount == 4) COLOR_VOLT else Color.WHITE)
     }
 
+    private fun renderSttStatus(ready: Boolean, openRouterOn: Boolean, futo: Boolean) {
+        val detail = when {
+            !ready -> "NEED MIC"
+            openRouterOn -> "OPENROUTER"
+            futo -> "FUTO OPTIONAL"
+            else -> "SYSTEM"
+        }
+        sttStatus.text = "STT · $detail"
+        sttStatus.setTextColor(if (ready) COLOR_VOLT else COLOR_WARN)
+        sttStatus.background = rounded(
+            fill = if (ready) Color.parseColor("#0D1709") else Color.parseColor("#1A1203"),
+            radius = dp(16),
+            stroke = if (ready) Color.parseColor("#415D12") else Color.parseColor("#72510A"),
+            strokeWidth = dp(1)
+        )
+    }
+
+    private fun renderOpenRouterStatus(enabled: Boolean) {
+        sttKeyStatus.text = if (enabled) "OPENROUTER · STT ON" else "OPENROUTER · OFF (SYSTEM/FUTO)"
+        sttKeyStatus.setTextColor(if (enabled) COLOR_WARN else COLOR_VOLT)
+        sttKeyStatus.background = rounded(
+            fill = if (enabled) Color.parseColor("#1A1203") else Color.parseColor("#0D1709"),
+            radius = dp(16),
+            stroke = if (enabled) Color.parseColor("#72510A") else Color.parseColor("#415D12"),
+            strokeWidth = dp(1)
+        )
+    }
+
     private fun renderCloudStatus(enabled: Boolean) {
-        cloudStatus.text = if (enabled) "CLOUD · DEEPSEEK ON" else "CLOUD · OFFLINE"
+        cloudStatus.text = if (enabled) "POLISH · DEEPSEEK ON" else "POLISH · OFFLINE CLEAN"
         cloudStatus.setTextColor(if (enabled) COLOR_WARN else COLOR_VOLT)
         cloudStatus.background = rounded(
             fill = if (enabled) Color.parseColor("#1A1203") else Color.parseColor("#0D1709"),
@@ -538,6 +609,7 @@ class MainActivity : Activity() {
     }
 
     private fun isFutoInstalled(): Boolean = runCatching {
+        @Suppress("DEPRECATION")
         packageManager.getPackageInfo("org.futo.voiceinput", 0)
         true
     }.getOrDefault(false)

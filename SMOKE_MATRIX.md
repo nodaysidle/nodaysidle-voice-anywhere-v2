@@ -8,8 +8,9 @@
 3. Falls back to `ACTION_PASTE` if SET_TEXT fails (e.g. custom views)
 4. If both fail, keeps the text on the clipboard and posts a persistent private notification with no transcript preview
 5. Overlay shows `✓ SET`, `✓ PST`, or `↗ CPY`
-6. If no editable field is focused before tapping mic, overlay shows `NO FIELD` and does not launch FUTO
-7. If FUTO shows its language picker, Voice Anywhere auto-selects the overlay language without requiring a user tap
+6. If no editable field is focused before tapping mic, overlay shows `NO FIELD` and does not launch STT
+7. If FUTO is used and shows its language picker, Voice Anywhere auto-selects the overlay language (EN/IT/SL) without requiring a user tap
+8. OpenRouter STT (when keyed) records in-pill with waveform; second tap stops and transcribes
 
 ---
 
