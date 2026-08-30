@@ -1,142 +1,127 @@
 <img src=".github/social-preview.png" alt="Voice Anywhere V2 — NODAYSIDLE" width="100%">
 
-# Voice Anywhere V2
+<h1 align="center">Voice Anywhere V2</h1>
 
-> Universal voice dictation overlay for Android — speak into any app, anywhere.
+<p align="center">
+  Overlay mic. Speak into any app. Words land at the cursor.
+</p>
 
-![Platform](https://img.shields.io/badge/platform-Android%2012%2B-green?style=flat-square)
-![Version](https://img.shields.io/badge/version-0.3.0-C8FF00?style=flat-square)
-![License](https://img.shields.io/badge/license-proprietary-black?style=flat-square)
+<p align="center">
+  <a href="https://github.com/nodaysidle/nodaysidle-voice-anywhere-v2/releases/download/v0.3.0/voice-anywhere-v2-v0.3.0.apk"><strong>Download v0.3.0 debug APK</strong></a>
+  ·
+  <a href="https://github.com/nodaysidle/nodaysidle-voice-anywhere-v2/releases/tag/v0.3.0">v0.3.0 release</a>
+  ·
+  <a href="https://github.com/nodaysidle/nodaysidle-voice-anywhere-v2/releases">All releases</a>
+</p>
 
-## Overview
+<p align="center">
+  <img alt="Android" src="https://img.shields.io/badge/Android-12%2B-C8FF00?style=flat-square&logo=android&logoColor=0A0A0F">
+  <img alt="Version" src="https://img.shields.io/badge/v0.3.0-debug-6B6B80?style=flat-square">
+  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-native-7F52FF?style=flat-square&logo=kotlin&logoColor=white">
+  <img alt="OpenRouter" src="https://img.shields.io/badge/STT-OpenRouter-6467F2?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/License-Proprietary-black?style=flat-square">
+</p>
 
-Voice Anywhere is a floating mic pill that lives on top of every app on your phone. Focus a text field, tap it, speak, and your transcribed text is injected directly into that field. If no editable field is focused, the app blocks recording instead of producing a confusing clipboard-only result.
+## The loop
 
-It uses Android Accessibility Services to detect the focused input field and intelligently selects the best insertion method per app.
+Voice Anywhere exists for one path: speech becomes text at the cursor in whatever app you already have open.
 
-## Features
+```text
+Tap overlay mic (field focused)
+  → STT (OpenRouter if keyed → FUTO if installed → system ACTION_RECOGNIZE_SPEECH)
+  → local clean (TextPostProcessor)
+  → insert at cursor   ← paste path ends here
+       SET → PST → clipboard + notification
 
-- **Floating pill overlay** — dark, quiet, Wispr-adjacent; draggable; waveform while recording
-- **Cursor-aware insertion** — appends at cursor, not end of field
-- **Smart hint detection** — never confuses placeholder text with real content
-- **No-field guard** — shows `NO FIELD` instead of launching dictation with nowhere to insert
-- **STT routing** — OpenRouter cloud STT when keyed; optional FUTO if installed; system recognizer otherwise
-- **Languages** — long-press cycles EN / IT / SL
-- **Opt-in local transcript history** — last dictations are copyable, retryable, and deletable only after the user enables local history
-- **Three insertion modes** with live visual feedback:
-  - `✓ SET` — direct `ACTION_SET_TEXT` (fastest, most apps)
-  - `✓ PST` — `ACTION_PASTE` fallback (Jetpack Compose apps)
-  - `↗ CPY` — clipboard copy (sandboxed fields — Gmail, browsers)
-- **AI text polish** — optional DeepSeek API key for grammar cleanup (Keystore-encrypted); paste never waits on polish
-- **OpenRouter STT** — optional OpenRouter API key (Keystore-encrypted); blank key uses system/FUTO path
+Optional DeepSeek polish (if keyed)
+  → runs in the background AFTER insert
+  → result is dropped — never re-inserted
+```
 
-## Compatibility
+| Stage | What happens |
+|---|---|
+| **Focus** | Tap an editable field in any app. No field → pill shows `NO FIELD` and does not record. |
+| **Speak** | Tap the floating pill. Waveform while speaking; idle shows mic + language tag (`EN` / `IT` / `SL`). Long-press cycles language. |
+| **Transcribe** | OpenRouter `deepgram/nova-3` when an OpenRouter key is set; else FUTO if installed; else system `ACTION_RECOGNIZE_SPEECH` with **no** `setPackage`. FUTO is optional — never required, never blocks ready. |
+| **Clean** | Offline `TextPostProcessor` runs before insert. |
+| **Insert** | Cursor insert: `ACTION_SET_TEXT` → `ACTION_PASTE` → clipboard + private notification. Pill flashes `✓ SET` / `✓ PST` / `↗ CPY`. |
+| **Polish (optional)** | DeepSeek, if keyed, runs after paste in the background. Output is **not** written back into the field. |
 
-Tested on Pixel 8a, Android 16 / API 36.
+Android only (`com.nodaysidle.voiceanywhere`; published debug APK is `com.nodaysidle.voiceanywhere.debug`). Accessibility Service + microphone required. OpenRouter and DeepSeek keys live in Android Keystore when set. Opt-in local transcript history if you turn it on (off by default; disabling clears saved transcripts).
 
-| App | Insertion Mode | Notes |
+## What’s on screen (v0.3.0)
+
+| Surface | Role in the loop |
+|---|---|
+| **Floating pill** | Wispr-dark overlay over every app. Idle: mic + language tag. Recording: waveform. Feedback: SET / PST / CPY / `NO FIELD`. |
+| **Setup screen** | Permissions, Accessibility enable, OpenRouter key, DeepSeek key, opt-in history. |
+| **History (opt-in)** | Copy / retry / delete recent transcripts when enabled. |
+
+**Not on the pill:** language picker UI beyond the long-press `EN` → `IT` → `SL` cycle. No second tap for FUTO language when FUTO is used — auto-select handles it.
+
+## STT (OpenRouter)
+
+| Priority | Engine | When |
 |---|---|---|
-| WhatsApp | ✓ SET | Hint strip via `selStart==-1` guard |
-| Telegram | ✓ SET | Clean |
-| Google Messages | ✓ SET | Clean |
-| Google Keep | ✓ SET | Clean |
-| YouTube Search | ✓ SET | Clean |
-| ChatGPT | ✓ SET | Clean |
-| Perplexity | ✓ SET | Clean |
-| Gemini | ↗ CPY | Jetpack Compose — `ACTION_PASTE` sandboxed |
-| Gmail body | ✓ SET | Body composer confirmed |
-| Comet browser | ✓ SET | Assistant/navigation field confirmed |
+| 1 | OpenRouter `deepgram/nova-3` | OpenRouter API key set (Keystore). In-pill AAC record → cloud transcription. |
+| 2 | FUTO Voice Input | Key blank **and** FUTO installed. Optional — missing FUTO does not block ready. |
+| 3 | System `ACTION_RECOGNIZE_SPEECH` | No key, no FUTO. Intent launched **without** `setPackage`. |
 
-## Requirements
+Languages passed as `en-US` / `it-IT` / `sl-SI` (OpenRouter ISO-639-1: `en` / `it` / `sl`). Network is required only when OpenRouter STT or DeepSeek polish keys are set — do not claim “no internet required.”
 
-- Android 12 or later (API 31)
-- Accessibility Service enabled
-- `RECORD_AUDIO` permission
-- `POST_NOTIFICATIONS` permission for clipboard fallback alerts on Android 13+
-- (Optional) OpenRouter API key for cloud STT
-- (Optional) FUTO Voice Input — used automatically when installed and no OpenRouter key is set
-- (Optional) DeepSeek API key for background polish
+## Stack
 
-## Installation
+| Layer | Technology |
+|---|---|
+| Language | Kotlin |
+| Min SDK | API 31 (Android 12+) |
+| Overlay | `TYPE_ACCESSIBILITY_OVERLAY` |
+| STT | OpenRouter `deepgram/nova-3` → optional FUTO → system `ACTION_RECOGNIZE_SPEECH` |
+| Text insertion | `ACTION_SET_TEXT` → `ACTION_PASTE` → clipboard + notification |
+| Keys | Android Keystore (OpenRouter, DeepSeek) |
+| Build | Gradle (Kotlin DSL) |
 
-1. Install APK via adb or sideload
-2. Open app → grant **Microphone**
-3. Open app → grant **Notifications** for clipboard fallback alerts
-4. Settings → Accessibility → **Voice Anywhere** → Enable
-5. (Optional) Enter OpenRouter API key for cloud STT. Leave blank for system/FUTO.
-6. (Optional) Enter DeepSeek API key for background polish. Paste never waits on it.
-7. (Optional) Enable local transcript history. Off by default; disabling clears saved transcripts.
+## Install the APK
 
-The floating dark pill will appear on screen.
+The published artifact is a **debug** build — version **0.3.0**, package `com.nodaysidle.voiceanywhere.debug`.
 
-## Usage
+1. Download [`voice-anywhere-v2-v0.3.0.apk`](https://github.com/nodaysidle/nodaysidle-voice-anywhere-v2/releases/download/v0.3.0/voice-anywhere-v2-v0.3.0.apk) from the [v0.3.0 release](https://github.com/nodaysidle/nodaysidle-voice-anywhere-v2/releases/tag/v0.3.0).
+2. Sideload on Android 12+ (API 31). Allow install from unknown sources for your file manager/browser.
+3. Open the app → grant **Microphone** (and **Notifications** on Android 13+ for clipboard fallback alerts).
+4. Settings → Accessibility → **Voice Anywhere** → Enable.
+5. (Optional) OpenRouter key for cloud STT. (Optional) DeepSeek key for background polish. (Optional) Local history.
 
-1. Open any app and tap an input field
-2. Tap the floating pill
-3. Speak — waveform shows while recording (OpenRouter path); system/FUTO UI otherwise
-4. Tap again to stop (OpenRouter path) — text inserts at the cursor
-5. Long-press the pill to cycle EN / IT / SL
-6. If local history is enabled, open the app to copy, retry, delete, or clear recent transcripts
+Sideloaded and used on a **Xiaomi M2007J3SY**, Android 12 (API 31). Source `applicationId` is `com.nodaysidle.voiceanywhere`; this APK carries the debug suffix.
 
-## Architecture
-
-```
-VoiceAccessibilityService   — core service, node tracking, injection logic
-FloatingMicOverlay          — TYPE_ACCESSIBILITY_OVERLAY pill + waveform
-InsertionFeedback           — mode → state/label/color mapping
-TextInsertionMerger         — pure cursor-aware merge logic with unit tests
-PillDrawable                — rounded pill background drawable
-DictationActivity           — FUTO (optional) or system RecognizerIntent bridge
-DictationLanguage           — EN / IT / SL cycle + locale tags
-OpenRouterSttClient         — cloud STT via OpenRouter audio transcriptions
-DictationAudioRecorder      — in-pill AAC recorder for OpenRouter path
-TextPostProcessor           — offline text cleanup (spacing, caps) before insert
-DeepSeekTextPolisher        — optional AI grammar polish (background, non-blocking)
-OpenRouterKeyStore          — Android Keystore-backed OpenRouter API key
-DeepSeekKeyStore            — Android Keystore-backed DeepSeek API key
-TranscriptHistoryStore      — opt-in local-only capped transcript history
-ClipboardNotification       — private nudge notification for clipboard-only apps
-```
-
-## Development
+## Build from source
 
 ```bash
-# Debug
 ./gradlew assembleDebug
+```
 
-# Unit tests
-./gradlew testDebugUnitTest
+Artifact:
 
-# Release (requires keystore)
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+`assembleRelease` is **not** a bare one-liner. It needs `app/keystore/release.jks` (gitignored) plus:
+
+```bash
+export VOICE_ANYWHERE_STORE_PASSWORD=...
+export VOICE_ANYWHERE_KEY_ALIAS=...
+export VOICE_ANYWHERE_KEY_PASSWORD=...
 ./gradlew assembleRelease
 ```
 
-### Signing
+## Not here
 
-Release builds use `app/keystore/release.jks`. The keystore is **not committed to the repo**. Set credentials with `VOICE_ANYWHERE_STORE_PASSWORD`, `VOICE_ANYWHERE_KEY_ALIAS`, and `VOICE_ANYWHERE_KEY_PASSWORD` environment variables.
-
-Release boundary: do not publish or migrate this repository history publicly until the old committed signing material has been sanitized or explicitly accepted as burned history. Use only the rotated local release key for future release validation.
-
-## Known Limitations
-
-- Some sandboxed web or custom editor fields may still fall back to clipboard-only
-- System `SpeechRecognizer` alone can fail with error=9 on Pixel 8a; this app uses `RecognizerIntent` or OpenRouter instead of depending on that API as the only engine
-- FUTO (when used) steals focus during STT; node snapshot is taken before mic tap to compensate
-- Accessibility service restarts on app update — must re-enable manually
-- Clipboard fallback notifications do not show transcript previews
-- OpenRouter STT and DeepSeek polish require network when their keys are set
-
-## Version History
-
-| Version | Notes |
-|---|---|
-| 0.3.0 | FUTO optional, OpenRouter STT, SL language, Wispr-dark overlay, non-blocking polish |
-| 0.2.0 | Mode indicator (SET/PST/CPY), hint text fix, cursor-aware append, release signing |
-| 0.1.0 | Initial build — basic overlay + injection |
-
-## Status
-
-Active — v0.3.0. Proprietary project maintained by NODAYSIDLE.
+- iOS
+- Web / Capacitor
+- Play Store distribution
+- “No internet required” (OpenRouter STT and DeepSeek polish need network when keyed)
+- FUTO as a hard requirement (optional only)
+- Platform `SpeechRecognizer` as the documented fallback API (fallback is `ACTION_RECOGNIZE_SPEECH` without `setPackage`)
 
 ## License
 
