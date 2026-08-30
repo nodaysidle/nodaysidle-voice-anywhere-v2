@@ -58,7 +58,7 @@ When the result is bad, say it bad.
 
 ## Project: Voice Anywhere V2
 
-An Android accessibility overlay app. A floating mic button appears over every app on the device. User taps → STT fires → transcribed text is inserted at the cursor. Works via `AccessibilityService` + `ACTION_SET_TEXT` (primary) or clipboard fallback.
+An Android accessibility overlay app. A floating mic pill appears over every app on the device. User taps → STT fires → transcribed text is inserted at the cursor. Works via `AccessibilityService` + `ACTION_SET_TEXT` (primary) or clipboard fallback.
 
 **Target:** Pixel 8a · Android API 31+ · Kotlin
 
@@ -68,7 +68,7 @@ An Android accessibility overlay app. A floating mic button appears over every a
 |---|---|
 | Language | Kotlin |
 | Min SDK | API 31 (Android 12) |
-| STT Engine | FUTO Keyboard `RecognizeActivity` |
+| STT Engine | OpenRouter STT (keyed) → optional FUTO → system `RecognizerIntent` |
 | Overlay | `TYPE_ACCESSIBILITY_OVERLAY` window |
 | Text insertion | `ACTION_SET_TEXT` → clipboard fallback |
 | Build | Gradle (Kotlin DSL) |
@@ -77,33 +77,36 @@ An Android accessibility overlay app. A floating mic button appears over every a
 
 ```
 app/src/main/java/com/nodaysidle/voiceanywhere/
-├── MainActivity.kt                    — App entry, permission setup
-├── DictationActivity.kt               — Bridges to FUTO RecognizeActivity
+├── MainActivity.kt — App entry, permission setup, API keys
+├── DictationActivity.kt — Bridges to FUTO (optional) or system RecognizerIntent
 ├── service/
-│   └── VoiceAccessibilityService.kt  — Core: overlay, text insertion, STT trigger
-├── history/                           — Local transcript history storage
-├── stt/                               — STT engine wrappers
-└── polish/                            — UI polish components
+│   └── VoiceAccessibilityService.kt — Core: overlay, text insertion, STT trigger
+├── history/ — Local transcript history storage
+├── stt/ — OpenRouter STT client, audio recorder, language cycle
+├── security/ — Keystore-backed OpenRouter + DeepSeek keys
+└── polish/ — Optional DeepSeek polish + offline TextPostProcessor
 ```
 
 ## Critical Decisions — Do Not Reverse
 
-1. **STT = FUTO only.** Platform `SpeechRecognizer` fails with error=9 on Pixel 8a even with RECORD_AUDIO granted. FUTO handles its own permissions. Do not revert.
+1. **STT routing = OpenRouter when keyed, else optional FUTO, else system recognizer.** Do not make FUTO required. Do not use platform `SpeechRecognizer` as the *only* engine (error=9 on Pixel 8a); `RecognizerIntent` without `setPackage` is the no-key fallback. OpenRouter owns in-pill recording UI when keyed.
 2. **Text insertion = ACTION_SET_TEXT first, clipboard fallback second.** Some apps (WebViews, custom editors) reject ACTION_SET_TEXT. Always fall back gracefully.
 3. **Overlay = TYPE_ACCESSIBILITY_OVERLAY.** Required to draw over all apps without SYSTEM_ALERT_WINDOW permission.
-4. **FUTO language picker = auto-select.** Tapping the overlay must not require a second user tap when FUTO shows its language picker.
+4. **Own the recording UI when on OpenRouter.** For FUTO path, auto-select the language picker so tapping the overlay does not require a second user tap.
 5. **History = opt-in local transcript text only.** Do not store voice audio by default; transcript history must remain copyable/deletable when enabled, must be off by default, and disabling it must clear saved transcripts.
+6. **Paste never waits on polish.** Offline `TextPostProcessor` runs before insert; optional DeepSeek polish is background-only after paste. Timeouts stay on cloud calls.
+7. **Languages = EN / IT / SL** via long-press cycle. Pass `EXTRA_LANGUAGE` (`en-US` / `it-IT` / `sl-SI`) and OpenRouter ISO-639-1 (`en` / `it` / `sl`).
+8. **Do not claim "no internet required."** OpenRouter STT and DeepSeek polish need network when keyed.
 
 ## Current State
 
-- `v0.2.0` — FUTO STT working, overlay functional, text insertion implemented
+- `v0.3.0` — FUTO optional, OpenRouter STT path, SL language, Wispr-dark overlay
 - Active work: compatibility map of ACTION_SET_TEXT vs clipboard fallback across target apps
 
 ## Build & Install
 
 ```bash
 # Build
-cd /Volumes/omarchyuser/projekti/nodaysidle-voice-anywhere-v2
 ./gradlew assembleDebug
 
 # Install to Pixel 8a
@@ -120,10 +123,12 @@ adb -s 52151JEKB14522 install -r app/build/outputs/apk/debug/app-debug.apk
 
 - Dark theme always
 - Volt `#C8FF00` accent
+- Quiet Wispr-adjacent pill — dark fill, subtle stroke, waveform while recording
 - Tight animations — nothing sloppy
 - No placeholder UI, no broken states in shipping builds
 
 ## Out of Scope
 
-- Language switching UI (deferred)
+- Language switching UI beyond long-press cycle (deferred)
 - Public release / distribution until signing-history cleanup and device smoke are complete
+- iOS, web, payments, accounts
