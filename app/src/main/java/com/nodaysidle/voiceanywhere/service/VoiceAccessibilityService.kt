@@ -1,43 +1,28 @@
 package com.nodaysidle.voiceanywhere.service
 
 import android.accessibilityservice.AccessibilityService
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.core.content.ContextCompat
-import android.Manifest
-
-import com.nodaysidle.voiceanywhere.DictationActivity
-import com.nodaysidle.voiceanywhere.history.TranscriptHistoryStore
-import com.nodaysidle.voiceanywhere.polish.DeepSeekTextPolisher
-import com.nodaysidle.voiceanywhere.polish.TextPostProcessor
-import com.nodaysidle.voiceanywhere.security.DeepSeekKeyStore
-import com.nodaysidle.voiceanywhere.security.OpenRouterKeyStore
-import com.nodaysidle.voiceanywhere.stt.DictationAudioRecorder
 import com.nodaysidle.voiceanywhere.stt.DictationLanguage
-import com.nodaysidle.voiceanywhere.stt.OpenRouterSttClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
+/**
+ * Accessibility helper: editable-node cache + ACTION_SET_TEXT / ACTION_PASTE.
+ *
+ * Overlay and STT live in [VoiceKeepAliveService] so the pill survives when
+ * MIUI kills this binding. Do not host TYPE_ACCESSIBILITY_OVERLAY here anymore.
+ */
 class VoiceAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var overlay: FloatingMicOverlay? = null
-    private var isListening = false
-    private var cloudRecording = false
     private var lastEditableNode: AccessibilityNodeInfo? = null
     private var lastEditableText: String = ""
     private var lastEditableCursor: Int = 0
@@ -45,216 +30,44 @@ class VoiceAccessibilityService : AccessibilityService() {
     private var lastEditableCapturedAtMillis: Long = 0
     private var futoAutoSelectInFlight = false
     private var lastFutoAutoSelectAtMillis: Long = 0
-    private var amplitudeJob: Job? = null
-    private var cloudTranscribeJob: Job? = null
-    private var audioRecorder: DictationAudioRecorder? = null
-
     private var currentLangIndex = 0
     private val prefs by lazy { getSharedPreferences("voice_anywhere", Context.MODE_PRIVATE) }
     private val selectedLanguage get() = DictationLanguage.fromIndex(currentLangIndex)
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        runCatching {
-            activeService = this
-            currentLangIndex = prefs.getInt(PREF_LANGUAGE_INDEX, 0)
-                .coerceIn(0, DictationLanguage.cycle.lastIndex)
-            audioRecorder = DictationAudioRecorder(this)
-            overlay = FloatingMicOverlay(
-                this,
-                onTap = { toggleListening() },
-                onLongPress = { cycleLanguage() }
-            ).also { it.show() }
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-            Log.d(TAG, "Floating overlay initialized")
-        }.onFailure {
-            Log.e(TAG, "Overlay init failed", it)
-        }
+        activeService = this
+        currentLangIndex = prefs.getInt(PREF_LANGUAGE_INDEX, 0)
+            .coerceIn(0, DictationLanguage.cycle.lastIndex)
+        // Kick the keep-alive FGS so overlay + process persistence start with a11y.
+        VoiceKeepAliveService.start(this)
+        Log.d(TAG, "Accessibility bound — keep-alive requested")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val source = event?.source
         val packageName = event?.packageName?.toString().orEmpty()
-        if (isListening && !cloudRecording && packageName == FUTO_PACKAGE) {
+        if (packageName == FUTO_PACKAGE) {
             scheduleFutoLanguageAutoSelect()
         }
         if (source?.isEditable == true && shouldCacheEditablePackage(packageName)) {
             cacheEditableNode(source, packageName)
         }
+        // Keep language index in sync with KeepAlive long-press cycles.
+        currentLangIndex = prefs.getInt(PREF_LANGUAGE_INDEX, currentLangIndex)
+            .coerceIn(0, DictationLanguage.cycle.lastIndex)
     }
 
     override fun onInterrupt() {
-        stopListening(cancel = true)
+        Log.w(TAG, "Accessibility interrupted")
     }
 
     override fun onDestroy() {
-        stopListening(cancel = true)
         if (activeService === this) activeService = null
-        overlay?.hide()
         scope.cancel()
+        // Intentionally do NOT stop VoiceKeepAliveService — overlay must survive.
+        Log.w(TAG, "Accessibility destroyed/unbound — keep-alive left running")
         super.onDestroy()
-    }
-
-    private fun toggleListening() {
-        if (isListening) stopListening(cancel = false) else startListening()
-    }
-
-    private fun cycleLanguage() {
-        currentLangIndex = (currentLangIndex + 1) % DictationLanguage.cycle.size
-        prefs.edit().putInt(PREF_LANGUAGE_INDEX, currentLangIndex).apply()
-        Log.d(TAG, "Language cycled to ${selectedLanguage.tag} (${selectedLanguage.localeTag})")
-        overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-    }
-
-    private fun startListening() {
-        runCatching {
-            if (!cacheCurrentFocusedEditable()) {
-                showNoFieldFeedback()
-                return
-            }
-
-            val openRouterKey = OpenRouterKeyStore.read(this)
-            if (openRouterKey.isNotBlank()) {
-                startCloudRecording(openRouterKey)
-                return
-            }
-
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                Log.w(TAG, "RECORD_AUDIO missing for system STT fallback")
-                showTransientError()
-                return
-            }
-
-            isListening = true
-            cloudRecording = false
-            overlay?.setState(FloatingMicOverlay.State.RECORDING)
-            val intent = Intent(this, DictationActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                )
-                putExtra(DictationActivity.EXTRA_LANGUAGE, selectedLanguage.localeTag)
-                putExtra(DictationActivity.EXTRA_PREFER_FUTO, isFutoInstalled())
-            }
-            startActivity(intent)
-            Log.d(TAG, "DictationActivity launched lang=${selectedLanguage.localeTag}")
-        }.onFailure {
-            Log.e(TAG, "Dictation launch failed", it)
-            isListening = false
-            cloudRecording = false
-            overlay?.setState(FloatingMicOverlay.State.ERROR)
-        }
-    }
-
-    private fun startCloudRecording(apiKey: String) {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.w(TAG, "RECORD_AUDIO missing for OpenRouter STT")
-            showTransientError()
-            return
-        }
-        val recorder = audioRecorder ?: DictationAudioRecorder(this).also { audioRecorder = it }
-        recorder.start()
-        isListening = true
-        cloudRecording = true
-        overlay?.setState(FloatingMicOverlay.State.RECORDING)
-        startAmplitudePolling()
-        cloudTranscribeJob?.cancel()
-        Log.d(TAG, "OpenRouter STT recording started lang=${selectedLanguage.iso6391} keyLen=${apiKey.length}")
-    }
-
-    private fun startAmplitudePolling() {
-        amplitudeJob?.cancel()
-        amplitudeJob = scope.launch {
-            while (isActive && cloudRecording) {
-                val amp = audioRecorder?.maxAmplitude() ?: 0
-                val normalized = (amp / 32767f).coerceIn(0f, 1f)
-                overlay?.setAmplitude(if (normalized < 0.05f) 0.15f else normalized)
-                delay(50L)
-            }
-        }
-    }
-
-    private fun stopListening(cancel: Boolean) {
-        if (!isListening) return
-        if (cloudRecording) {
-            if (cancel) {
-                cancelCloudRecording()
-            } else {
-                finishCloudRecording()
-            }
-            return
-        }
-        isListening = false
-        if (cancel) {
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-        }
-    }
-
-    private fun cancelCloudRecording() {
-        amplitudeJob?.cancel()
-        cloudTranscribeJob?.cancel()
-        audioRecorder?.cancel()
-        cloudRecording = false
-        isListening = false
-        overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-    }
-
-    private fun finishCloudRecording() {
-        amplitudeJob?.cancel()
-        val file = audioRecorder?.stop()
-        cloudRecording = false
-        isListening = false
-        if (file == null) {
-            showTransientError()
-            return
-        }
-        overlay?.setState(FloatingMicOverlay.State.PROCESSING)
-        val key = OpenRouterKeyStore.read(this)
-        if (key.isBlank()) {
-            file.delete()
-            showTransientError()
-            return
-        }
-        val language = selectedLanguage.iso6391
-        cloudTranscribeJob = scope.launch {
-            val text = runCatching {
-                OpenRouterSttClient(key).transcribe(file, language)
-            }.onFailure {
-                Log.e(TAG, "OpenRouter STT failed", it)
-            }.getOrDefault("")
-            withContext(Dispatchers.IO) { file.delete() }
-            if (text.isBlank()) {
-                showTransientError()
-            } else {
-                handleTranscript(text)
-            }
-        }
-    }
-
-    private fun showTransientError() {
-        isListening = false
-        cloudRecording = false
-        overlay?.setState(FloatingMicOverlay.State.ERROR)
-        scope.launch {
-            delay(ERROR_HOLD_MS)
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-        }
-    }
-
-    private fun showNoFieldFeedback() {
-        isListening = false
-        cloudRecording = false
-        overlay?.setState(FloatingMicOverlay.State.NO_FIELD)
-        Log.w(TAG, "Dictation blocked: no focused editable field")
-        scope.launch {
-            delay(NO_FIELD_HOLD_MS)
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-        }
     }
 
     private fun scheduleFutoLanguageAutoSelect() {
@@ -285,75 +98,21 @@ class VoiceAccessibilityService : AccessibilityService() {
         return clicked
     }
 
-    /**
-     * Paste never waits on polish. Offline clean + insert first;
-     * optional DeepSeek polish runs afterward and does not block insertion.
-     */
-    private fun handleTranscript(rawText: String) {
-        isListening = false
-        cloudRecording = false
-        if (rawText.isBlank()) {
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-            return
-        }
-        val cleaned = TextPostProcessor.clean(rawText)
-        overlay?.setState(FloatingMicOverlay.State.PROCESSING)
-        scope.launch {
-            val (setTextOk, pasteOk) = injectText(cleaned)
-            val feedback = InsertionFeedback.from(setTextOk, pasteOk)
-            TranscriptHistoryStore.add(
-                context = this@VoiceAccessibilityService,
-                text = cleaned,
-                targetPackage = lastEditablePackage,
-                resultLabel = feedback.label
-            )
-            Log.d(
-                TAG,
-                "Dictation handled rawLength=${rawText.length} cleanedLength=${cleaned.length} setText=$setTextOk paste=$pasteOk feedback=${feedback.label}"
-            )
-            if (!setTextOk && !pasteOk) ClipboardNotification.show(this@VoiceAccessibilityService, cleaned)
-            overlay?.setState(feedback.state)
-            delay(feedback.holdMillis)
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-        }
-
-        val polishKey = DeepSeekKeyStore.read(this)
-        if (polishKey.isNotBlank()) {
-            scope.launch(Dispatchers.IO) {
-                runCatching {
-                    DeepSeekTextPolisher(polishKey).polish(rawText)
-                }.onFailure {
-                    Log.w(TAG, "Background DeepSeek polish failed", it)
-                }
-                // Intentionally not re-injected — paste already happened.
-            }
-        }
-    }
-
-    private fun handleHistoryReinsert(text: String) {
-        if (text.isBlank()) return
-        overlay?.setState(FloatingMicOverlay.State.PROCESSING)
-        scope.launch {
-            val (setTextOk, pasteOk) = injectText(text)
-            val feedback = InsertionFeedback.from(setTextOk, pasteOk)
-            Log.d(TAG, "History reinsert handled length=${text.length} setText=$setTextOk paste=$pasteOk feedback=${feedback.label}")
-            if (!setTextOk && !pasteOk) ClipboardNotification.show(this@VoiceAccessibilityService, text)
-            overlay?.setState(feedback.state)
-            delay(feedback.holdMillis)
-            overlay?.setState(FloatingMicOverlay.State.IDLE, selectedLanguage.tag)
-        }
-    }
-
     private suspend fun injectText(text: String): Pair<Boolean, Boolean> {
-        setClipboard(text)
+        // Clipboard is set by InsertCoordinator before this is called.
+        cacheCurrentFocusedEditable()
         val focusedViaLive = waitForFocusedEditable()
         val usingStaleNode = focusedViaLive == null
         val focused = focusedViaLive
             ?: lastEditableNode?.takeIf { isLastEditableFresh() }
-            ?: return Pair(false, false).also { Log.w(TAG, "No editable node available for insertion; clipboard still updated") }
+            ?: return Pair(false, false).also {
+                Log.w(TAG, "No editable node available for insertion")
+            }
 
         if (!focused.refresh()) {
-            return Pair(false, false).also { Log.w(TAG, "Editable node refresh failed; clipboard still updated") }
+            return Pair(false, false).also {
+                Log.w(TAG, "Editable node refresh failed")
+            }
         }
 
         val existing = lastEditableText
@@ -377,13 +136,8 @@ class VoiceAccessibilityService : AccessibilityService() {
         }
 
         val pasteOk = if (!setTextOk) focused.performAction(AccessibilityNodeInfo.ACTION_PASTE) else false
-        Log.d(TAG, "Insert attempt setText=$setTextOk paste=$pasteOk cursor=$safePos existingLength=${existing.length} textLength=${text.length}")
+        Log.d(TAG, "Insert attempt setText=$setTextOk paste=$pasteOk cursor=$safePos textLength=${text.length}")
         return Pair(setTextOk, pasteOk)
-    }
-
-    private fun setClipboard(text: String) {
-        val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Voice Anywhere", text))
     }
 
     private fun cacheCurrentFocusedEditable(): Boolean {
@@ -412,12 +166,17 @@ class VoiceAccessibilityService : AccessibilityService() {
         val hint = source.hintText?.toString().orEmpty()
         lastEditableText = when {
             rawText == hint -> ""
-            source.textSelectionStart == -1 -> "".also { Log.d(TAG, "Hint strip: placeholder detected length=${rawText.length}") }
+            source.textSelectionStart == -1 -> "".also {
+                Log.d(TAG, "Hint strip: placeholder detected length=${rawText.length}")
+            }
             else -> rawText
         }
         lastEditableCursor = if (lastEditableText.isEmpty()) 0
-            else source.textSelectionStart.coerceAtLeast(0)
-        Log.d(TAG, "Cached editable node package=$packageName textLength=${lastEditableText.length} hintLength=${hint.length} selStart=${source.textSelectionStart} selEnd=${source.textSelectionEnd} cursor=$lastEditableCursor")
+        else source.textSelectionStart.coerceAtLeast(0)
+        Log.d(
+            TAG,
+            "Cached editable node package=$packageName textLength=${lastEditableText.length} cursor=$lastEditableCursor"
+        )
     }
 
     private fun shouldCacheEditablePackage(packageName: String): Boolean {
@@ -474,19 +233,11 @@ class VoiceAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun isFutoInstalled(): Boolean = runCatching {
-        @Suppress("DEPRECATION")
-        packageManager.getPackageInfo(FUTO_PACKAGE, 0)
-        true
-    }.getOrDefault(false)
-
     companion object {
         private const val TAG = "VoiceAnywhereService"
         private const val PREF_LANGUAGE_INDEX = "selected_language_index"
         private const val FOCUS_RETRY_COUNT = 6
         private const val FOCUS_RETRY_DELAY_MS = 120L
-        private const val ERROR_HOLD_MS = 1200L
-        private const val NO_FIELD_HOLD_MS = 1400L
         private const val STALE_EDITABLE_NODE_MS = 120_000L
         private const val FUTO_PACKAGE = "org.futo.voiceinput"
         private const val FUTO_PICKER_SETTLE_MS = 60L
@@ -497,21 +248,61 @@ class VoiceAccessibilityService : AccessibilityService() {
             FUTO_PACKAGE,
             "org.futo.inputmethod.latin"
         )
-        @Volatile private var activeService: VoiceAccessibilityService? = null
 
-        fun deliverDictationResult(text: String) {
-            activeService?.handleTranscript(text)
-        }
+        @Volatile
+        private var activeService: VoiceAccessibilityService? = null
 
-        fun deliverDictationError() {
-            activeService?.showTransientError()
-        }
-
-        fun reinsertHistoryText(text: String): Boolean {
+        /**
+         * True only when the AccessibilityService instance is live and bound.
+         * Settings listing alone is NOT enough — Xiaomi can leave
+         * ENABLED_ACCESSIBILITY_SERVICES populated while Bound is empty / CRASHED.
+         */
+        fun isBound(): Boolean {
             val service = activeService ?: return false
-            if (!service.isLastEditableFresh()) return false
-            service.handleHistoryReinsert(text)
+            val alive = runCatching { service.serviceInfo != null }.getOrDefault(false)
+            if (!alive) {
+                if (activeService === service) activeService = null
+                Log.w(TAG, "Accessibility instance stale — treating as unbound/DEAD")
+                return false
+            }
             return true
         }
+
+        fun hasFreshEditable(): Boolean {
+            if (!isBound()) return false
+            val service = activeService ?: return false
+            if (service.cacheCurrentFocusedEditable()) return true
+            return service.isLastEditableFresh()
+        }
+
+        fun lastTargetPackage(): String =
+            if (isBound()) activeService?.lastEditablePackage.orEmpty() else ""
+
+        /**
+         * Attempt SET_TEXT then PASTE on the cached/focused node.
+         * Returns null when unbound/DEAD so callers fall through to IME cursor insert.
+         */
+        suspend fun tryInject(text: String): Pair<Boolean, Boolean>? {
+            if (!isBound()) return null
+            val service = activeService ?: return null
+            return service.injectText(text)
+        }
+
+        @Deprecated("Dictation results go to VoiceKeepAliveService", ReplaceWith("VoiceKeepAliveService.deliverDictationResult(text)"))
+        fun deliverDictationResult(text: String) {
+            VoiceKeepAliveService.deliverDictationResult(text)
+            // If keep-alive is not up yet, nothing to do — result is dropped with log.
+            if (!VoiceKeepAliveService.isRunning()) {
+                Log.w(TAG, "Dictation result with no keep-alive; dropped length=${text.length}")
+            }
+        }
+
+        @Deprecated("Dictation errors go to VoiceKeepAliveService", ReplaceWith("VoiceKeepAliveService.deliverDictationError()"))
+        fun deliverDictationError() {
+            VoiceKeepAliveService.deliverDictationError()
+        }
+
+        fun reinsertHistoryText(text: String): Boolean =
+            VoiceKeepAliveService.reinsertHistoryText(text)
     }
 }

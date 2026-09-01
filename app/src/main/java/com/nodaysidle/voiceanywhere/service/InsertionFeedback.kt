@@ -6,18 +6,41 @@ data class InsertionFeedback(
     val holdMillis: Long
 ) {
     companion object {
-        fun from(setText: Boolean, paste: Boolean): InsertionFeedback = when {
-            setText -> InsertionFeedback(
+        fun from(setText: Boolean, paste: Boolean): InsertionFeedback =
+            from(InsertRouter.winner(
+                a11yBound = setText || paste,
+                imeAvailable = false,
+                setTextOk = setText,
+                pasteOk = paste,
+                imeOk = false
+            ))
+
+        fun from(setText: Boolean, paste: Boolean, ime: Boolean): InsertionFeedback =
+            from(InsertRouter.winner(
+                a11yBound = setText || paste,
+                imeAvailable = ime,
+                setTextOk = setText,
+                pasteOk = paste,
+                imeOk = ime
+            ))
+
+        fun from(channel: InsertRouter.Channel): InsertionFeedback = when (channel) {
+            InsertRouter.Channel.A11Y_SET_TEXT -> InsertionFeedback(
                 state = FloatingMicOverlay.State.SUCCESS,
                 label = "✓ SET",
                 holdMillis = 1200L
             )
-            paste -> InsertionFeedback(
+            InsertRouter.Channel.A11Y_PASTE -> InsertionFeedback(
                 state = FloatingMicOverlay.State.PASTED,
                 label = "✓ PST",
                 holdMillis = 1200L
             )
-            else -> InsertionFeedback(
+            InsertRouter.Channel.IME -> InsertionFeedback(
+                state = FloatingMicOverlay.State.IME,
+                label = "✓ IME",
+                holdMillis = 1200L
+            )
+            InsertRouter.Channel.CLIPBOARD -> InsertionFeedback(
                 state = FloatingMicOverlay.State.COPIED,
                 label = "↗ CPY",
                 holdMillis = 2200L

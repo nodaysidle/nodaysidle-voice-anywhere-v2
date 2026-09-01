@@ -5,13 +5,13 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -22,9 +22,11 @@ import android.text.TextWatcher
 import android.text.format.DateFormat
 import android.text.method.PasswordTransformationMethod
 import android.view.Gravity
+import android.view.View
 import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -35,9 +37,14 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.nodaysidle.voiceanywhere.history.TranscriptHistoryItem
 import com.nodaysidle.voiceanywhere.history.TranscriptHistoryStore
+import com.nodaysidle.voiceanywhere.persistence.BatteryOptimizationHelper
+import com.nodaysidle.voiceanywhere.persistence.XiaomiPersistenceHints
 import com.nodaysidle.voiceanywhere.security.DeepSeekKeyStore
 import com.nodaysidle.voiceanywhere.security.OpenRouterKeyStore
+import com.nodaysidle.voiceanywhere.service.AccessibilityBindStatus
+import com.nodaysidle.voiceanywhere.service.AccessibilityBindStatusResolver
 import com.nodaysidle.voiceanywhere.service.VoiceAccessibilityService
+import com.nodaysidle.voiceanywhere.service.VoiceKeepAliveService
 
 class MainActivity : Activity() {
     private lateinit var root: LinearLayout
@@ -46,11 +53,15 @@ class MainActivity : Activity() {
     private lateinit var sttStatus: TextView
     private lateinit var notificationStatus: TextView
     private lateinit var accessibilityStatus: TextView
+    private lateinit var overlayStatus: TextView
+    private lateinit var imeStatus: TextView
+    private lateinit var batteryStatus: TextView
     private lateinit var cloudStatus: TextView
     private lateinit var sttKeyStatus: TextView
     private lateinit var apiKeyInput: EditText
     private lateinit var openRouterKeyInput: EditText
     private lateinit var historyList: LinearLayout
+    private lateinit var xiaomiHint: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +78,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        maybeStartKeepAlive()
         refreshStatus()
     }
 
@@ -102,6 +114,7 @@ class MainActivity : Activity() {
 
         root.addView(hero())
         root.addView(setupPanel())
+        root.addView(persistencePanel())
         root.addView(sttPanel())
         root.addView(polishPanel())
         root.addView(historyPanel())
@@ -134,7 +147,7 @@ class MainActivity : Activity() {
         })
 
         addView(TextView(this@MainActivity).apply {
-            text = "A floating dictation pill for Android. Tap, speak, words insert at the cursor. OpenRouter STT when keyed; system recognizer otherwise. FUTO is optional."
+            text = "A floating dictation pill for Android. Tap, speak, words insert at the cursor. OpenRouter STT when keyed; system recognizer otherwise. FUTO is optional. Keep-alive overlay + IME cover Xiaomi Accessibility death."
             setTextColor(COLOR_TEXT_MUTED)
             textSize = 15f
             setLineSpacing(0f, 1.16f)
@@ -157,10 +170,16 @@ class MainActivity : Activity() {
             sttStatus = statusTile("STT")
             notificationStatus = statusTile("ALERTS")
             accessibilityStatus = statusTile("ACCESS")
+            overlayStatus = statusTile("OVERLAY")
+            imeStatus = statusTile("IME")
+            batteryStatus = statusTile("BATTERY")
             addView(micStatus)
             addView(sttStatus)
             addView(notificationStatus)
             addView(accessibilityStatus)
+            addView(overlayStatus)
+            addView(imeStatus)
+            addView(batteryStatus)
         })
 
         addView(buttonRow(
@@ -172,10 +191,56 @@ class MainActivity : Activity() {
             }
         ))
 
+        addView(buttonRow(
+            actionPill("Overlay", strong = true) { openOverlaySettings() },
+            actionPill("IME", strong = false) { openImeSettings() }
+        ))
+
         addView(actionPill("Open Accessibility Settings", strong = true) {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply {
             topMargin = dp(10)
+        })
+
+        addView(bodyText("ACCESS is BOUND only when the service is live. DEAD means Settings may still list it but the binding is gone (Xiaomi FGSA CAPS DEAD) — use Overlay + IME; FGS does not rebind Accessibility. Never treat Settings-enabled alone as ready."))
+    }
+
+    private fun persistencePanel(): LinearLayout = panel().apply {
+        addView(rowHeader("PERSIST", "Battery + Xiaomi"))
+        addView(bodyText("Battery unrestricted + Xiaomi Autostart keep the process alive. They do not rebind Accessibility. Voice Anywhere never enables Accessibility for you and never skips MIUI confirmation."))
+
+        addView(buttonRow(
+            actionPill("Battery unrestricted", strong = true) {
+                startActivity(BatteryOptimizationHelper.requestIgnoreBatteryOptimizationsIntent(this@MainActivity))
+            },
+            actionPill("App battery", strong = false) {
+                startActivity(BatteryOptimizationHelper.appBatterySettingsIntent(this@MainActivity))
+            }
+        ))
+
+        addView(buttonRow(
+            actionPill("Xiaomi autostart", strong = false) {
+                startActivity(XiaomiPersistenceHints.autostartIntent(this@MainActivity))
+            },
+            actionPill("Xiaomi battery", strong = false) {
+                startActivity(XiaomiPersistenceHints.batteryNoRestrictionsIntent(this@MainActivity))
+            }
+        ))
+
+        xiaomiHint = bodyText(XiaomiPersistenceHints.AUTOSTART_COPY)
+        addView(xiaomiHint)
+
+        addView(actionPill("Start keep-alive now", strong = true) {
+            if (!Settings.canDrawOverlays(this@MainActivity)) {
+                Toast.makeText(this@MainActivity, "Grant overlay first", Toast.LENGTH_SHORT).show()
+                openOverlaySettings()
+            } else {
+                VoiceKeepAliveService.start(this@MainActivity)
+                Toast.makeText(this@MainActivity, "Keep-alive started", Toast.LENGTH_SHORT).show()
+                refreshStatus()
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply {
+            topMargin = dp(12)
         })
     }
 
@@ -262,9 +327,9 @@ class MainActivity : Activity() {
     private fun usagePanel(): LinearLayout = panel().apply {
         addView(rowHeader("FLOW", "Four moves"))
         addView(step("01", "Focus any text field", "Chat, browser, notes, search — wherever the cursor is."))
-        addView(step("02", "Tap the floating pill", "Dark quiet overlay stays above every app. Long-press cycles EN / IT / SL."))
+        addView(step("02", "Tap the floating pill", "Keep-alive overlay over every app. Long-press cycles EN / IT / SL."))
         addView(step("03", "Speak", "OpenRouter records in-pill when keyed; otherwise system or optional FUTO."))
-        addView(step("04", "Watch the result", "Text lands at the cursor. SET / PST / CPY shows how it got there."))
+        addView(step("04", "Watch the result", "Autopaste at cursor: SET / PST when Access is BOUND; IME when selected; CPY only as last resort."))
     }
 
     private fun historyPanel(): LinearLayout = panel().apply {
@@ -445,25 +510,79 @@ class MainActivity : Activity() {
     private fun refreshStatus() {
         val mic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val notifications = hasNotificationPermission()
-        val accessibility = isAccessibilityEnabled()
+        val a11yStatus = accessibilityBindStatus()
+        val overlay = Settings.canDrawOverlays(this)
+        val imeEnabled = isOurImeEnabled()
+        val imeSelected = isOurImeSelected()
+        val batteryOk = BatteryOptimizationHelper.isIgnoringBatteryOptimizations(this)
+        val keepAlive = VoiceKeepAliveService.isRunning()
         val openRouterOn = OpenRouterKeyStore.read(this).isNotBlank()
         val futo = isFutoInstalled()
-        // FUTO is optional — never blocks readiness. STT is ready when mic is granted.
         val sttReady = mic
+
         renderStatus(micStatus, "MIC", mic, "READY", "GRANT")
         renderSttStatus(sttReady, openRouterOn, futo)
         renderStatus(notificationStatus, "ALERTS", notifications, "READY", "GRANT")
-        renderStatus(accessibilityStatus, "ACCESS", accessibility, "ENABLED", "ENABLE")
+        renderAccessibilityStatus(a11yStatus)
+        renderStatus(
+            overlayStatus,
+            "OVERLAY",
+            overlay,
+            if (keepAlive) "ON + ALIVE" else "GRANTED",
+            "GRANT"
+        )
+        renderImeStatus(imeEnabled, imeSelected)
+        renderStatus(batteryStatus, "BATTERY", batteryOk, "UNRESTRICTED", "RESTRICTED")
+
         if (::cloudStatus.isInitialized) renderCloudStatus(DeepSeekKeyStore.read(this).isNotBlank())
         if (::sttKeyStatus.isInitialized) renderOpenRouterStatus(openRouterOn)
         if (::historyList.isInitialized) refreshHistory()
-        val readyCount = listOf(mic, sttReady, notifications, accessibility).count { it }
-        readinessLabel.text = when (readyCount) {
-            4 -> "Ready to dictate"
-            3 -> "One switch left"
-            else -> "$readyCount / 4 systems ready"
+        if (::xiaomiHint.isInitialized) {
+            xiaomiHint.visibility = if (XiaomiPersistenceHints.isXiaomiDevice()) View.VISIBLE else View.GONE
         }
-        readinessLabel.setTextColor(if (readyCount == 4) COLOR_VOLT else Color.WHITE)
+
+        val insertReady = a11yStatus == AccessibilityBindStatus.BOUND || imeEnabled
+        val coreReady = listOf(mic, sttReady, overlay, insertReady).count { it }
+        readinessLabel.text = when {
+            coreReady == 4 && batteryOk -> "Ready to dictate"
+            coreReady == 4 -> "Ready · set battery unrestricted on Xiaomi"
+            a11yStatus == AccessibilityBindStatus.ENABLED_UNBOUND && overlay ->
+                "Access DEAD · overlay/IME path available"
+            a11yStatus == AccessibilityBindStatus.ENABLED_UNBOUND ->
+                "Access DEAD — grant overlay + IME"
+            else -> "$coreReady / 4 systems ready"
+        }
+        readinessLabel.setTextColor(if (coreReady == 4) COLOR_VOLT else Color.WHITE)
+    }
+
+    private fun renderAccessibilityStatus(status: AccessibilityBindStatus) {
+        val detail = AccessibilityBindStatusResolver.tileDetail(status)
+        val ok = AccessibilityBindStatusResolver.tileOk(status)
+        accessibilityStatus.text = "ACCESS · $detail"
+        accessibilityStatus.setTextColor(if (ok) COLOR_VOLT else COLOR_WARN)
+        accessibilityStatus.background = rounded(
+            fill = if (ok) Color.parseColor("#0D1709") else Color.parseColor("#1A1203"),
+            radius = dp(16),
+            stroke = if (ok) Color.parseColor("#415D12") else Color.parseColor("#72510A"),
+            strokeWidth = dp(1)
+        )
+    }
+
+    private fun renderImeStatus(enabled: Boolean, selected: Boolean) {
+        val detail = when {
+            selected -> "SELECTED"
+            enabled -> "ENABLED"
+            else -> "ENABLE"
+        }
+        val ok = enabled
+        imeStatus.text = "IME · $detail"
+        imeStatus.setTextColor(if (ok) COLOR_VOLT else COLOR_WARN)
+        imeStatus.background = rounded(
+            fill = if (ok) Color.parseColor("#0D1709") else Color.parseColor("#1A1203"),
+            radius = dp(16),
+            stroke = if (ok) Color.parseColor("#415D12") else Color.parseColor("#72510A"),
+            strokeWidth = dp(1)
+        )
     }
 
     private fun renderSttStatus(ready: Boolean, openRouterOn: Boolean, futo: Boolean) {
@@ -545,7 +664,7 @@ class MainActivity : Activity() {
 
     private fun retryHistoryItem(item: TranscriptHistoryItem) {
         copyTextToClipboard(item.text)
-        val queued = VoiceAccessibilityService.reinsertHistoryText(item.text)
+        val queued = VoiceKeepAliveService.reinsertHistoryText(item.text)
         Toast.makeText(this, if (queued) "Retrying insert" else "Copied", Toast.LENGTH_SHORT).show()
     }
 
@@ -591,7 +710,16 @@ class MainActivity : Activity() {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    private fun isAccessibilityEnabled(): Boolean {
+    private fun accessibilityBindStatus(): AccessibilityBindStatus {
+        val settingsEnabled = isAccessibilityListedInSettings()
+        return AccessibilityBindStatusResolver.resolve(
+            settingsEnabled = settingsEnabled,
+            serviceBound = VoiceAccessibilityService.isBound()
+        )
+    }
+
+    /** Settings listing only — does NOT mean the service is bound/alive. */
+    private fun isAccessibilityListedInSettings(): Boolean {
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
@@ -599,12 +727,47 @@ class MainActivity : Activity() {
         if (enabledServices.contains(packageName) && enabledServices.contains("VoiceAccessibilityService")) {
             return true
         }
-
         val manager = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
         val services = manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         return services.any {
             it.resolveInfo.serviceInfo.name.contains("VoiceAccessibilityService") ||
                 it.resolveInfo.serviceInfo.packageName == packageName
+        }
+    }
+
+    private fun isOurImeEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_INPUT_METHODS).orEmpty()
+        return enabled.contains(packageName) && enabled.contains("VoiceInputMethodService")
+    }
+
+    private fun isOurImeSelected(): Boolean {
+        val current = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD).orEmpty()
+        return current.contains(packageName) && current.contains("VoiceInputMethodService")
+    }
+
+    private fun openOverlaySettings() {
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+        )
+    }
+
+    private fun openImeSettings() {
+        startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        if (isOurImeEnabled()) {
+            window.decorView.post {
+                runCatching {
+                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
+                }
+            }
+        }
+    }
+
+    private fun maybeStartKeepAlive() {
+        if (Settings.canDrawOverlays(this) && !VoiceKeepAliveService.isRunning()) {
+            VoiceKeepAliveService.start(this)
         }
     }
 
