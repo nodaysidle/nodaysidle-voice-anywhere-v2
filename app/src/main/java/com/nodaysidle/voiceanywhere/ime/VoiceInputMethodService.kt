@@ -129,6 +129,13 @@ class VoiceInputMethodService : InputMethodService() {
         @Volatile
         private var pendingTranscript: String? = null
 
+        data class CommitResult(
+            /** commitText / composing wrote into the focused editor now. */
+            val committed: Boolean,
+            /** Held for onStartInput flush — still a cursor path, not clipboard. */
+            val queued: Boolean
+        )
+
         /** True when this IME is selected and has an active input connection. */
         fun isConnected(): Boolean {
             val ime = activeInstance ?: return false
@@ -138,26 +145,40 @@ class VoiceInputMethodService : InputMethodService() {
         fun isRunning(): Boolean = activeInstance != null
 
         /**
-         * Commit immediately if connected; otherwise queue for next onStartInput.
-         * Returns true only if commit succeeded now.
+         * IME can take cursor insert now (InputConnection) or after the next
+         * focused-field start (service selected). Used to avoid clipboard-first.
          */
-        fun tryCommit(text: String): Boolean {
-            if (text.isBlank()) return false
+        fun isAvailableForInsert(): Boolean = isRunning()
+
+        /**
+         * Autopaste at the focused editor cursor.
+         * Returns [CommitResult.committed] on immediate write, [CommitResult.queued]
+         * when the IME is selected but will flush on the next input start.
+         * Never opens a share sheet.
+         */
+        fun tryCommit(text: String): CommitResult {
+            if (text.isBlank()) return CommitResult(committed = false, queued = false)
             val ime = activeInstance
             if (ime != null && ime.currentInputConnection != null) {
                 val ok = ime.tryCommitInternal(text)
                 if (ok) {
                     pendingTranscript = null
-                    return true
+                    return CommitResult(committed = true, queued = false)
                 }
             }
-            pendingTranscript = text
-            Log.d(TAG, "Queued transcript for IME length=${text.length} running=${ime != null}")
-            return false
+            if (ime != null) {
+                pendingTranscript = text
+                Log.d(TAG, "Queued transcript for IME cursor flush length=${text.length}")
+                return CommitResult(committed = false, queued = true)
+            }
+            Log.d(TAG, "IME unavailable for cursor insert length=${text.length}")
+            return CommitResult(committed = false, queued = false)
         }
 
         fun clearPending() {
             pendingTranscript = null
         }
+
+        fun hasPending(): Boolean = pendingTranscript != null
     }
 }

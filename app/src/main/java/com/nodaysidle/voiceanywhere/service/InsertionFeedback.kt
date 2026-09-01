@@ -9,7 +9,7 @@ data class InsertionFeedback(
         fun from(setText: Boolean, paste: Boolean): InsertionFeedback =
             from(InsertRouter.winner(
                 a11yBound = setText || paste,
-                imeConnected = false,
+                imeAvailable = false,
                 setTextOk = setText,
                 pasteOk = paste,
                 imeOk = false
@@ -18,7 +18,7 @@ data class InsertionFeedback(
         fun from(setText: Boolean, paste: Boolean, ime: Boolean): InsertionFeedback =
             from(InsertRouter.winner(
                 a11yBound = setText || paste,
-                imeConnected = ime,
+                imeAvailable = ime,
                 setTextOk = setText,
                 pasteOk = paste,
                 imeOk = ime

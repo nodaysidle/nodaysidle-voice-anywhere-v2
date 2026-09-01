@@ -7,34 +7,43 @@ import android.util.Log
 import com.nodaysidle.voiceanywhere.ime.VoiceInputMethodService
 
 /**
- * Runs the insert cascade at the focused cursor:
- * a11y SET_TEXT → a11y PASTE → IME commitText → clipboard last resort.
- * Clipboard is always primed so ACTION_PASTE can work; it is not the primary path.
+ * Cursor autopaste cascade — never clipboard-first:
+ * 1. Accessibility bound → ACTION_SET_TEXT, then ACTION_PASTE into the focused field
+ * 2. Else IME available → commitText / setComposingText at the editor cursor
+ * 3. Clipboard + notification only when neither cursor path can run
+ *
+ * Clipboard is primed only for a11y PASTE (needs clip) or true last-resort fallback.
  */
 object InsertCoordinator {
     private const val TAG = "VoiceAnywhereInsert"
 
     suspend fun insert(context: Context, text: String): InsertionFeedback {
-        setClipboard(context, text)
-
         val a11yBound = VoiceAccessibilityService.isBound()
         var setTextOk = false
         var pasteOk = false
+
         if (a11yBound) {
+            // PASTE needs the clip; SET_TEXT does not — priming here serves PASTE only.
+            setClipboard(context, text)
             val result = VoiceAccessibilityService.tryInject(text)
             setTextOk = result?.first == true
             pasteOk = result?.second == true
         }
 
-        val imeConnected = VoiceInputMethodService.isConnected()
+        val imeAvailable = VoiceInputMethodService.isAvailableForInsert()
         var imeOk = false
-        if (!setTextOk && !pasteOk && imeConnected) {
-            imeOk = VoiceInputMethodService.tryCommit(text)
+        if (!setTextOk && !pasteOk && imeAvailable) {
+            val imeResult = VoiceInputMethodService.tryCommit(text)
+            imeOk = imeResult.committed || imeResult.queued
+            Log.d(
+                TAG,
+                "IME cursor path committed=${imeResult.committed} queued=${imeResult.queued}"
+            )
         }
 
         val channel = InsertRouter.winner(
             a11yBound = a11yBound,
-            imeConnected = imeConnected,
+            imeAvailable = imeAvailable,
             setTextOk = setTextOk,
             pasteOk = pasteOk,
             imeOk = imeOk
@@ -42,9 +51,11 @@ object InsertCoordinator {
         val feedback = InsertionFeedback.from(channel)
         Log.d(
             TAG,
-            "insert channel=$channel a11yBound=$a11yBound setText=$setTextOk paste=$pasteOk imeConnected=$imeConnected imeOk=$imeOk"
+            "insert channel=$channel a11yBound=$a11yBound setText=$setTextOk paste=$pasteOk imeAvailable=$imeAvailable imeOk=$imeOk"
         )
-        if (channel == InsertRouter.Channel.CLIPBOARD) {
+
+        if (InsertRouter.shouldNotifyClipboard(channel)) {
+            setClipboard(context, text)
             ClipboardNotification.show(context, text)
         }
         return feedback

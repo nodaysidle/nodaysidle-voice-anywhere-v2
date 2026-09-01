@@ -1,6 +1,8 @@
 package com.nodaysidle.voiceanywhere.service
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InsertRouterTest {
@@ -12,7 +14,7 @@ class InsertRouterTest {
                 InsertRouter.Channel.A11Y_PASTE,
                 InsertRouter.Channel.CLIPBOARD
             ),
-            InsertRouter.channels(a11yBound = true, imeConnected = false)
+            InsertRouter.channels(a11yBound = true, imeAvailable = false)
         )
     }
 
@@ -20,7 +22,7 @@ class InsertRouterTest {
     fun deadA11yWithImeUsesImeBeforeClipboard() {
         assertEquals(
             listOf(InsertRouter.Channel.IME, InsertRouter.Channel.CLIPBOARD),
-            InsertRouter.channels(a11yBound = false, imeConnected = true)
+            InsertRouter.channels(a11yBound = false, imeAvailable = true)
         )
     }
 
@@ -28,7 +30,7 @@ class InsertRouterTest {
     fun deadA11yWithoutImeFallsToClipboardOnly() {
         assertEquals(
             listOf(InsertRouter.Channel.CLIPBOARD),
-            InsertRouter.channels(a11yBound = false, imeConnected = false)
+            InsertRouter.channels(a11yBound = false, imeAvailable = false)
         )
     }
 
@@ -41,7 +43,7 @@ class InsertRouterTest {
                 InsertRouter.Channel.IME,
                 InsertRouter.Channel.CLIPBOARD
             ),
-            InsertRouter.channels(a11yBound = true, imeConnected = true)
+            InsertRouter.channels(a11yBound = true, imeAvailable = true)
         )
     }
 
@@ -51,7 +53,7 @@ class InsertRouterTest {
             InsertRouter.Channel.A11Y_SET_TEXT,
             InsertRouter.winner(
                 a11yBound = true,
-                imeConnected = true,
+                imeAvailable = true,
                 setTextOk = true,
                 pasteOk = true,
                 imeOk = true
@@ -65,7 +67,7 @@ class InsertRouterTest {
             InsertRouter.Channel.A11Y_PASTE,
             InsertRouter.winner(
                 a11yBound = true,
-                imeConnected = false,
+                imeAvailable = false,
                 setTextOk = false,
                 pasteOk = true,
                 imeOk = false
@@ -79,7 +81,7 @@ class InsertRouterTest {
             InsertRouter.Channel.IME,
             InsertRouter.winner(
                 a11yBound = false,
-                imeConnected = true,
+                imeAvailable = true,
                 setTextOk = false,
                 pasteOk = false,
                 imeOk = true
@@ -88,12 +90,12 @@ class InsertRouterTest {
     }
 
     @Test
-    fun winnerIgnoresImeOkUnlessConnected() {
+    fun winnerIgnoresImeOkUnlessAvailable() {
         assertEquals(
             InsertRouter.Channel.CLIPBOARD,
             InsertRouter.winner(
                 a11yBound = false,
-                imeConnected = false,
+                imeAvailable = false,
                 setTextOk = false,
                 pasteOk = false,
                 imeOk = true
@@ -102,16 +104,24 @@ class InsertRouterTest {
     }
 
     @Test
-    fun winnerClipboardIsLastResort() {
+    fun winnerClipboardIsLastResortOnly() {
         assertEquals(
             InsertRouter.Channel.CLIPBOARD,
             InsertRouter.winner(
                 a11yBound = true,
-                imeConnected = true,
+                imeAvailable = true,
                 setTextOk = false,
                 pasteOk = false,
                 imeOk = false
             )
         )
+    }
+
+    @Test
+    fun clipboardNotificationOnlyForClipboardChannel() {
+        assertTrue(InsertRouter.shouldNotifyClipboard(InsertRouter.Channel.CLIPBOARD))
+        assertFalse(InsertRouter.shouldNotifyClipboard(InsertRouter.Channel.A11Y_SET_TEXT))
+        assertFalse(InsertRouter.shouldNotifyClipboard(InsertRouter.Channel.A11Y_PASTE))
+        assertFalse(InsertRouter.shouldNotifyClipboard(InsertRouter.Channel.IME))
     }
 }
