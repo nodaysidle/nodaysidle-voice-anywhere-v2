@@ -91,7 +91,7 @@ app/src/main/java/com/nodaysidle/voiceanywhere/
 
 1. **STT routing = OpenRouter when keyed, else optional FUTO, else system recognizer.** Do not make FUTO required. Do not use platform `SpeechRecognizer` as the *only* engine (error=9 on Pixel 8a); `RecognizerIntent` without `setPackage` is the no-key fallback. OpenRouter owns in-pill recording UI when keyed.
 2. **Text insertion = ACTION_SET_TEXT first, clipboard fallback second.** Some apps (WebViews, custom editors) reject ACTION_SET_TEXT. Always fall back gracefully.
-3. **Overlay = TYPE_ACCESSIBILITY_OVERLAY.** Required to draw over all apps without SYSTEM_ALERT_WINDOW permission.
+3. **Overlay = TYPE_APPLICATION_OVERLAY from VoiceKeepAliveService (FGS).** Requires SYSTEM_ALERT_WINDOW. Do not host the pill only on AccessibilityService.onServiceConnected — that dies with Xiaomi a11y binding death. TYPE_ACCESSIBILITY_OVERLAY is legacy fallback only.
 4. **Own the recording UI when on OpenRouter.** For FUTO path, auto-select the language picker so tapping the overlay does not require a second user tap.
 5. **History = opt-in local transcript text only.** Do not store voice audio by default; transcript history must remain copyable/deletable when enabled, must be off by default, and disabling it must clear saved transcripts.
 6. **Paste never waits on polish.** Offline `TextPostProcessor` runs before insert; optional DeepSeek polish is background-only after paste. Timeouts stay on cloud calls.
@@ -100,8 +100,8 @@ app/src/main/java/com/nodaysidle/voiceanywhere/
 
 ## Current State
 
-- `v0.3.0` — FUTO optional, OpenRouter STT path, SL language, Wispr-dark overlay
-- Active work: compatibility map of ACTION_SET_TEXT vs clipboard fallback across target apps
+- `v0.4.0` — Keep-alive FGS + SYSTEM_ALERT_WINDOW overlay, Voice Anywhere IME insert fallback, honest ACCESS BOUND vs ENABLED/DEAD, battery/Xiaomi persistence prompts, M3 stadium pill (60dp)
+- Active work: device smoke on Xiaomi M2007J3SY (a11y death → overlay + IME autopaste)
 
 ## Build & Install
 

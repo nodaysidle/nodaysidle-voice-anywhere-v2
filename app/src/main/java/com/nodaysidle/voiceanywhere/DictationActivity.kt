@@ -5,7 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.util.Log
-import com.nodaysidle.voiceanywhere.service.VoiceAccessibilityService
+import com.nodaysidle.voiceanywhere.service.VoiceKeepAliveService
 
 /**
  * Transparent bridge activity that delegates speech recognition to an installed engine.
@@ -50,12 +50,12 @@ class DictationActivity : Activity() {
                     Log.d(TAG, "System recognizer launched after FUTO failure lang=$lang")
                 }.onFailure {
                     Log.e(TAG, "Failed to launch any recognizer", it)
-                    VoiceAccessibilityService.deliverDictationError()
+                    VoiceKeepAliveService.deliverDictationError()
                     finish()
                 }
             } else {
                 Log.e(TAG, "Failed to launch system recognizer", first)
-                VoiceAccessibilityService.deliverDictationError()
+                VoiceKeepAliveService.deliverDictationError()
                 finish()
             }
         }
@@ -77,13 +77,13 @@ class DictationActivity : Activity() {
                     .orEmpty()
                 Log.d(TAG, "Recognizer result length=${text.length}")
                 if (text.isNotBlank()) {
-                    VoiceAccessibilityService.deliverDictationResult(text)
+                    VoiceKeepAliveService.deliverDictationResult(text)
                 } else {
-                    VoiceAccessibilityService.deliverDictationError()
+                    VoiceKeepAliveService.deliverDictationError()
                 }
             } else {
                 Log.w(TAG, "Recognizer cancelled or failed resultCode=$resultCode")
-                VoiceAccessibilityService.deliverDictationError()
+                VoiceKeepAliveService.deliverDictationError()
             }
             finish()
         }

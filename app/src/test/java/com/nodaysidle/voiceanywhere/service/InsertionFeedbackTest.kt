@@ -23,6 +23,15 @@ class InsertionFeedbackTest {
     }
 
     @Test
+    fun imeOutcomeShowsImeInsertionMode() {
+        val feedback = InsertionFeedback.from(InsertRouter.Channel.IME)
+
+        assertEquals("✓ IME", feedback.label)
+        assertEquals(1200L, feedback.holdMillis)
+        assertEquals(FloatingMicOverlay.State.IME, feedback.state)
+    }
+
+    @Test
     fun fallbackOutcomeShowsCopiedSoUserKnowsToPasteManually() {
         val feedback = InsertionFeedback.from(setText = false, paste = false)
 

@@ -1,5 +1,8 @@
 <resources>
     <string name="app_name">Voice Anywhere</string>
     <string name="accessibility_service_label">Voice Anywhere Floating Mic</string>
-    <string name="accessibility_service_description">Shows a floating microphone and inserts your dictated text into the focused text field. Audio is processed only when you tap record.</string>
+    <string name="accessibility_service_description">Caches focused text fields and inserts dictated text via Accessibility when the service is bound. The floating mic itself runs in a separate keep-alive service so it can survive when the Accessibility binding dies on some OEMs.</string>
+    <string name="ime_label">Voice Anywhere Keyboard</string>
+    <string name="ime_subtype_label">Voice Anywhere</string>
+    <string name="keepalive_fgs_subtype">Keeps the floating dictation overlay and insert path alive when OEM power managers kill the Accessibility service binding.</string>
 </resources>
