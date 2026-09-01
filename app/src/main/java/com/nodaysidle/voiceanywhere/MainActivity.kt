@@ -202,7 +202,7 @@ class MainActivity : Activity() {
             topMargin = dp(10)
         })
 
-        addView(bodyText("ACCESS is BOUND only when the service is live. ENABLED / DEAD means Settings still lists it but the binding is gone — re-enable after MIUI cooldown, or use Overlay + IME. Never treat Settings-enabled alone as ready."))
+        addView(bodyText("ACCESS is BOUND only when the service is live. DEAD means Settings may still list it but the binding is gone (Xiaomi FGSA CAPS DEAD) — use Overlay + IME; FGS does not rebind Accessibility. Never treat Settings-enabled alone as ready."))
     }
 
     private fun persistencePanel(): LinearLayout = panel().apply {
@@ -547,20 +547,17 @@ class MainActivity : Activity() {
             coreReady == 4 && batteryOk -> "Ready to dictate"
             coreReady == 4 -> "Ready · set battery unrestricted on Xiaomi"
             a11yStatus == AccessibilityBindStatus.ENABLED_UNBOUND && overlay ->
-                "Access dead · overlay/IME path available"
+                "Access DEAD · overlay/IME path available"
             a11yStatus == AccessibilityBindStatus.ENABLED_UNBOUND ->
-                "Access listed but DEAD — grant overlay + IME"
+                "Access DEAD — grant overlay + IME"
             else -> "$coreReady / 4 systems ready"
         }
         readinessLabel.setTextColor(if (coreReady == 4) COLOR_VOLT else Color.WHITE)
     }
 
     private fun renderAccessibilityStatus(status: AccessibilityBindStatus) {
-        val (detail, ok) = when (status) {
-            AccessibilityBindStatus.BOUND -> "BOUND" to true
-            AccessibilityBindStatus.ENABLED_UNBOUND -> "ENABLED / DEAD" to false
-            AccessibilityBindStatus.DISABLED -> "ENABLE" to false
-        }
+        val detail = AccessibilityBindStatusResolver.tileDetail(status)
+        val ok = AccessibilityBindStatusResolver.tileOk(status)
         accessibilityStatus.text = "ACCESS · $detail"
         accessibilityStatus.setTextColor(if (ok) COLOR_VOLT else COLOR_WARN)
         accessibilityStatus.background = rounded(

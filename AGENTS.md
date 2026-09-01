@@ -69,7 +69,7 @@ An Android accessibility overlay app. A floating mic pill appears over every app
 | Language | Kotlin |
 | Min SDK | API 31 (Android 12) |
 | STT Engine | OpenRouter STT (keyed) → optional FUTO → system `RecognizerIntent` |
-| Overlay | `TYPE_ACCESSIBILITY_OVERLAY` window |
+| Overlay | `TYPE_APPLICATION_OVERLAY` from keep-alive FGS (`SYSTEM_ALERT_WINDOW`) |
 | Text insertion | `ACTION_SET_TEXT` → clipboard fallback |
 | Build | Gradle (Kotlin DSL) |
 

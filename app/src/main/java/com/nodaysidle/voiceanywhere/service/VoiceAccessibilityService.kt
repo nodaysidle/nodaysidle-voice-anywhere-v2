@@ -252,22 +252,38 @@ class VoiceAccessibilityService : AccessibilityService() {
         @Volatile
         private var activeService: VoiceAccessibilityService? = null
 
-        /** True only when the service instance is connected — not merely Settings-enabled. */
-        fun isBound(): Boolean = activeService != null
+        /**
+         * True only when the AccessibilityService instance is live and bound.
+         * Settings listing alone is NOT enough — Xiaomi can leave
+         * ENABLED_ACCESSIBILITY_SERVICES populated while Bound is empty / CRASHED.
+         */
+        fun isBound(): Boolean {
+            val service = activeService ?: return false
+            val alive = runCatching { service.serviceInfo != null }.getOrDefault(false)
+            if (!alive) {
+                if (activeService === service) activeService = null
+                Log.w(TAG, "Accessibility instance stale — treating as unbound/DEAD")
+                return false
+            }
+            return true
+        }
 
         fun hasFreshEditable(): Boolean {
+            if (!isBound()) return false
             val service = activeService ?: return false
             if (service.cacheCurrentFocusedEditable()) return true
             return service.isLastEditableFresh()
         }
 
-        fun lastTargetPackage(): String = activeService?.lastEditablePackage.orEmpty()
+        fun lastTargetPackage(): String =
+            if (isBound()) activeService?.lastEditablePackage.orEmpty() else ""
 
         /**
          * Attempt SET_TEXT then PASTE on the cached/focused node.
-         * Returns null when unbound; otherwise (setTextOk, pasteOk).
+         * Returns null when unbound/DEAD so callers fall through to IME cursor insert.
          */
         suspend fun tryInject(text: String): Pair<Boolean, Boolean>? {
+            if (!isBound()) return null
             val service = activeService ?: return null
             return service.injectText(text)
         }
